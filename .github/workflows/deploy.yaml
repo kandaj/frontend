@@ -33,7 +33,7 @@ jobs:
     # Step 4: Trigger Argo CD Sync
     - name: Trigger Argo CD Sync
       run: |
-        curl -X POST -H "Content-Type: application/json" \
+        curl -k -X POST -H "Content-Type: application/json" \
           -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" \
           -d '{"repoURL":"https://github.com/kandaj/frontend"}' \
           $ARGOCD_SERVER/api/v1/applications/frontend-app/sync
