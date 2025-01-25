@@ -22,8 +22,8 @@ jobs:
     - name: Build and Push Docker Image
       run: |
         IMAGE_TAG=$(git rev-parse --short HEAD)
-        docker build -t your-docker-username/frontend-app:$IMAGE_TAG .
-        docker push your-docker-username/frontend-app:$IMAGE_TAG
+        docker build -t jagkandasamy/frontend-app:$IMAGE_TAG .
+        docker push jagkandasamy/frontend-app:$IMAGE_TAG
         echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
     - name: Update Helm Values and Push
@@ -33,7 +33,7 @@ jobs:
         git config user.email "actions@github.com"
         git add helm-chart/values.yaml
         git commit -m "Update image tag to $IMAGE_TAG"
-        git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:${{ github.ref_name }}
+        git push https://x-access-token:${{ secrets.HELM_GITHUB_TOKEN }}@github.com/kandaj/helm-app.git HEAD:main
 
     - name: Trigger Argo CD Sync
       run: |
