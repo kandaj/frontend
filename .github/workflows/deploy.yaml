@@ -28,7 +28,7 @@ jobs:
         docker build -t $IMAGE_NAME .
         docker push $IMAGE_NAME
       env:
-        IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/frontend-app:latest
+        IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/frontend:latest
 
     # Step 4: Trigger Argo CD Sync
     - name: Trigger Argo CD Sync
