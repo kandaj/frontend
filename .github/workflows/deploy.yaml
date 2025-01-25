@@ -24,7 +24,7 @@ jobs:
     # Step 3: Build and Push Docker Image with 'latest' Tag
     - name: Build and Push Docker Image
       run: |
-        IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/frontend-app:latest
+        IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/frontend:latest
         docker build -t $IMAGE_NAME .
         docker push $IMAGE_NAME
       env:
