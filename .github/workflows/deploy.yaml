@@ -3,39 +3,43 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - main  # Trigger on code push to the main branch
+      - main
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Checkout Code
     - name: Checkout Code
       uses: actions/checkout@v3
 
-    # Step 2: Log in to Docker Hub using API Token
     - name: Log in to Docker Hub
       uses: docker/login-action@v2
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_TOKEN }}
 
-    # Step 3: Build and Push Docker Image with 'latest' Tag
     - name: Build and Push Docker Image
       run: |
-        IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/frontend:latest
-        docker build -t $IMAGE_NAME .
-        docker push $IMAGE_NAME
-      env:
-        IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/frontend:latest
+        IMAGE_TAG=$(git rev-parse --short HEAD)
+        docker build -t your-docker-username/frontend-app:$IMAGE_TAG .
+        docker push your-docker-username/frontend-app:$IMAGE_TAG
+        echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-    # Step 4: Trigger Argo CD Sync
+    - name: Update Helm Values and Push
+      run: |
+        sed -i "s|tag: .*|tag: $IMAGE_TAG|" helm-chart/values.yaml
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add helm-chart/values.yaml
+        git commit -m "Update image tag to $IMAGE_TAG"
+        git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:${{ github.ref_name }}
+
     - name: Trigger Argo CD Sync
       run: |
         curl -k -X POST -H "Content-Type: application/json" \
           -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" \
-          -d '{"repoURL":"https://github.com/kandaj/frontend"}' \
+          -d '{"prune": true}' \
           $ARGOCD_SERVER/api/v1/applications/frontend-app/sync
       env:
         ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
