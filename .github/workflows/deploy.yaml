@@ -32,7 +32,7 @@ jobs:
     # Step 4: Clone the Helm Chart Repository
     - name: Clone Helm Repository
       run: |
-        git clone https://x-access-token:${{ secrets.HELM_GITHUB_TOKEN }}@github.com/<owner>/<helm-repository>.git helm-repo
+        git clone https://x-access-token:${{ secrets.HELM_GITHUB_TOKEN }}@github.com/kandaj/helm-app.git helm-repo
         cd helm-repo
         git checkout main
 
