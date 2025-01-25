@@ -10,15 +10,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # Step 1: Checkout Code (Current Repository)    
     - name: Checkout Code
       uses: actions/checkout@v3
 
+    # Step 2: Log in to Docker Hub
     - name: Log in to Docker Hub
       uses: docker/login-action@v2
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_TOKEN }}
 
+    # Step 3: Build and Push Docker Image
     - name: Build and Push Docker Image
       run: |
         IMAGE_TAG=$(git rev-parse --short HEAD)
@@ -26,15 +29,27 @@ jobs:
         docker push jagkandasamy/frontend-app:$IMAGE_TAG
         echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-    - name: Update Helm Values and Push
+    # Step 4: Clone the Helm Chart Repository
+    - name: Clone Helm Repository
       run: |
-        sed -i "s|tag: .*|tag: $IMAGE_TAG|" helm-chart/values.yaml
+        git clone https://x-access-token:${{ secrets.HELM_GITHUB_TOKEN }}@github.com/<owner>/<helm-repository>.git helm-repo
+        cd helm-repo
+        git checkout main
+
+    # Step 5: Update the `values.yaml` File in Helm Repository
+    - name: Update Helm Values
+      run: |
+        cd helm-repo
+        sed -i "s|tag: .*|tag: $IMAGE_TAG|" values.yaml
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
-        git add helm-chart/values.yaml
+        git add values.yaml
         git commit -m "Update image tag to $IMAGE_TAG"
-        git push https://x-access-token:${{ secrets.HELM_GITHUB_TOKEN }}@github.com/kandaj/helm-app.git HEAD:main
+        git push origin main
+      env:
+        IMAGE_TAG: ${{ env.IMAGE_TAG }}
 
+    # Step 6: Trigger Argo CD Sync
     - name: Trigger Argo CD Sync
       run: |
         curl -k -X POST -H "Content-Type: application/json" \
