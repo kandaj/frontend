@@ -35,7 +35,7 @@ jobs:
       run: |
         curl -X POST -H "Content-Type: application/json" \
           -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" \
-          -d '{"repoURL":"https://github.com/your-org/your-repo"}' \
+          -d '{"repoURL":"https://github.com/kandaj/frontend"}' \
           $ARGOCD_SERVER/api/v1/applications/frontend-app/sync
       env:
         ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
