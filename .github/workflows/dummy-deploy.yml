@@ -98,7 +98,6 @@ jobs:
     name: Deployment Summary
     runs-on: ubuntu-latest
     needs: [Deploy-TWeb-to-Live, Deploy-TAPI-to-Live, Deploy-TTV-to-Live]
-    if: always()
     steps:
       - name: Show Summary
         run: |
