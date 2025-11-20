@@ -18,19 +18,7 @@ function App() {
         <p>
           second new paragraph added
         </p>
-        <p>
-          testing commit 1
-        </p>
-        <p>
-          testing commit 2
-        </p>
-        <p>
-          testing commit 3
-        </p>
-
-        <p>
-          testing commit 4
-        </p>
+        
         <a
           className="App-link"
           href="https://reactjs.org"
