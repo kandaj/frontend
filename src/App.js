@@ -18,6 +18,9 @@ function App() {
         <p>
           second new paragraph added
         </p>
+        <p>
+          testing commit
+        </p>
         <a
           className="App-link"
           href="https://reactjs.org"
