@@ -132,32 +132,7 @@ jobs:
           echo "✅ Metrics recorded successfully"
       
       # ────────────────────────────────────────────────
-      # 4. Record Deployment Duration
-      # ────────────────────────────────────────────────
-      - name: Record Deployment Duration
-        if: ${{ steps.meta.outputs.conclusion == 'success' && steps.tags.outputs.current_tag != '' }}
-        run: |
-          DURATION_MS="${{ github.event.workflow_run.run_duration_ms }}"
-
-          if [ -z "$DURATION_MS" ] || [ "$DURATION_MS" = "null" ]; then
-            echo "⚠️  No duration reported — skipping metric"
-            exit 0
-          fi
-
-          DURATION_SECONDS=$((DURATION_MS / 1000))
-          CURRENT_TAG="${{ steps.tags.outputs.current_tag }}"
-
-          echo "⏱️  Deployment Duration = ${DURATION_SECONDS}s"
-
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "DeploymentDuration" \
-          #   --value $DURATION_SECONDS \
-          #   --unit Seconds \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }},Release=${CURRENT_TAG}
-    
-      # ────────────────────────────────────────────────
-      # 5. Record failed deployments
+      # 4. Record failed deployments
       # ────────────────────────────────────────────────
       - name: Record Failed Deployment
         if: ${{ steps.meta.outputs.conclusion != 'success' }}
