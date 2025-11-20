@@ -7,9 +7,16 @@ function App() {
       <header className="App-header">
         <img src={logo} className="App-logo" alt="logo" />
         <h1>
-          Welcome to React!!!! Testing dora metrics </h1>
+          Welcome to React!!!! Testing dora metrics 
+        </h1>
         <p>
           Edit <code>src/App.js</code> and save to reload.
+        </p>
+        <p>
+          new paragraph added.
+        </p>
+        <p>
+          second new paragraph added
         </p>
         <a
           className="App-link"
