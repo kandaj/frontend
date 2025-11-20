@@ -90,7 +90,7 @@ jobs:
             FIRST_COMMIT=$(git log --first-parent main --format=%H --reverse ${PREV_TAG}..${CURRENT_TAG} | head -1)
           fi
 
-          FIRST_COMMIT_TIME=$(git show -s --format=%ct $FIRST_COMMIT)
+          FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_TAG}..${CURRENT_TAG} | head -1)
           DEPLOY_TIME=$(date +%s)
           LEAD_TIME=$((DEPLOY_TIME - FIRST_COMMIT_TIME))
           echo "Lead Time = ${LEAD_TIME}s"
