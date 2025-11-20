@@ -16,8 +16,3 @@ jobs:
           echo "Release name: ${{ github.event.release.name }}"
 
       # Add artificial delay to simulate deployment duration
-      - name: Simulate Deployment Work
-        run: |
-          echo "Starting deployment simulation..."
-          sleep 30  # Sleep for 30 seconds (adjust as needed)
-          echo "Deployment simulation complete"    
