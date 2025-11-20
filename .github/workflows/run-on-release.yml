@@ -1,5 +1,4 @@
-name: Run on Release
-
+name: release
 on:
   release:
     types: [published]   # or: [created]

@@ -1,7 +1,7 @@
 name: DORA Metrics Collection
 on:
   workflow_run:
-    workflows: ["Run on Release"]
+    workflows: ["release"]
     types: [completed]
 
 permissions:
