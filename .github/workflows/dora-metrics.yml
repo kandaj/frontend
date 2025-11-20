@@ -1,13 +1,13 @@
 name: DORA Metrics Collection
-
 on:
   workflow_run:
-    workflows: ["CI-Deploy-TWeb-TAPI-TTV-to-Live"]
+    workflows: ["Run on Release"]
     types: [completed]
+
 permissions:
+  contents: read
   id-token: write
-  contents: read    
-    
+
 jobs:
   collect-metrics:
     runs-on: ubuntu-latest
@@ -17,75 +17,130 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ Configure AWS credentials
+      # AWS auth
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION || 'eu-west-1' }}
 
-      # 🧭 Detect trigger type and environment/service
+      # ────────────────────────────────────────────────
+      # 1. Detect deployment metadata
+      # ────────────────────────────────────────────────
       - name: Detect Trigger Context
         id: meta
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            echo "Triggered by workflow_run: ${{ github.event.workflow_run.name }}"
-            
-            COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
-            CONCLUSION="${{ github.event.workflow_run.conclusion }}"
-            
-            # Always production for this deployment workflow
-            ENVIRONMENT="production"
-            
-            # Store common values
-            echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
-            echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
-            echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-            
-            # Set a default service (will be used for aggregated metrics)
-            echo "service=telescope" >> $GITHUB_OUTPUT
-            
-            echo "Deployment to production completed with status: $CONCLUSION"
-          else
-            echo "Triggered manually via workflow_dispatch"
-            echo "service=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
-            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-            echo "commit_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
-            echo "conclusion=success" >> $GITHUB_OUTPUT
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
+          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
+          echo "environment=production" >> $GITHUB_OUTPUT
+          echo "service=telescope" >> $GITHUB_OUTPUT
+
+          echo "Deployment finished: commit=$COMMIT_SHA status=$CONCLUSION"
+
+      # ────────────────────────────────────────────────
+      # 2. Detect release tags (current + previous)
+      # ────────────────────────────────────────────────
+      - name: Detect Release Tags
+        id: tags
+        run: |
+          COMMIT_SHA="${{ steps.meta.outputs.commit_sha }}"
+
+          CURRENT_TAG=$(git describe --tags --exact-match $COMMIT_SHA 2>/dev/null || echo "")
+          echo "Current release tag: $CURRENT_TAG"
+
+          if [ -z "$CURRENT_TAG" ]; then
+            echo "No release tag found — not a production release."
+            echo "current_tag=" >> $GITHUB_OUTPUT
+            echo "previous_tag=" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-      # ✅ Record successful deployments
+          # Find previous release tag
+          PREV_TAG=$(git describe --tags --abbrev=0 ${CURRENT_TAG}^ 2>/dev/null || echo "")
+          echo "Previous release tag: $PREV_TAG"
+
+          echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+          echo "previous_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      # ────────────────────────────────────────────────
+      # 3. Record SUCCESS metrics
+      #    - Lead Time
+      #    - Deployment Count
+      #    - Batch Size
+      # ────────────────────────────────────────────────
       - name: Record Successful Deployment Metrics
-        if: ${{ steps.meta.outputs.conclusion == 'success' }}
+        if: ${{ steps.meta.outputs.conclusion == 'success' && steps.tags.outputs.current_tag != '' }}
         run: |
-          FIRST_COMMIT=$(git log --format=%H --reverse ${{ steps.meta.outputs.commit_sha }} ^main | head -1)
+          CURRENT_TAG="${{ steps.tags.outputs.current_tag }}"
+          PREV_TAG="${{ steps.tags.outputs.previous_tag }}"
+
+          echo "Computing metrics for release $CURRENT_TAG"
+
+          # ----------------------------
+          # Lead Time Calculation
+          # ----------------------------
+          if [ -z "$PREV_TAG" ]; then
+            echo "First release — using root commit."
+            FIRST_COMMIT=$(git rev-list --max-parents=0 HEAD)
+          else
+            FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_TAG}..${CURRENT_TAG} | head -1)
+          fi
+
           FIRST_COMMIT_TIME=$(git show -s --format=%ct $FIRST_COMMIT)
           DEPLOY_TIME=$(date +%s)
           LEAD_TIME=$((DEPLOY_TIME - FIRST_COMMIT_TIME))
 
-          echo "Lead time for changes: ${LEAD_TIME}s"
+          echo "Lead Time = ${LEAD_TIME}s"
 
-          aws cloudwatch put-metric-data \
-            --namespace "DORA" \
-            --metric-name "LeadTimeForChanges" \
-            --value $LEAD_TIME \
-            --unit Seconds \
-            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          # ----------------------------
+          # Batch Size Calculation
+          # ----------------------------
+          if [ -z "$PREV_TAG" ]; then
+            COMMIT_COUNT=$(git rev-list --count ${CURRENT_TAG})
+          else
+            COMMIT_COUNT=$(git rev-list --count ${PREV_TAG}..${CURRENT_TAG})
+          fi
 
-          aws cloudwatch put-metric-data \
-            --namespace "DORA" \
-            --metric-name "DeploymentCount" \
-            --value 1 \
-            --unit Count \
-            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          echo "Batch Size = $COMMIT_COUNT commits"
 
-      # ⚠️ Record failed deployments
+          # ----------------------------
+          # Send metrics to CloudWatch
+          # ----------------------------
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "LeadTimeForChanges" \
+          #   --value $LEAD_TIME \
+          #   --unit Seconds \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
+
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "DeploymentCount" \
+          #   --value 1 \
+          #   --unit Count \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
+
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "BatchSize" \
+          #   --value $COMMIT_COUNT \
+          #   --unit Count \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_TAG}
+
+      # ────────────────────────────────────────────────
+      # 4. Record failed deployments
+      # ────────────────────────────────────────────────
       - name: Record Failed Deployment
         if: ${{ steps.meta.outputs.conclusion != 'success' }}
         run: |
-          aws cloudwatch put-metric-data \
-            --namespace "DORA" \
-            --metric-name "FailedDeployment" \
-            --value 1 \
-            --unit Count \
-            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          echo "Deployment failed — recording metric."
+
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "FailedDeployment" \
+          #   --value 1 \
+          #   --unit Count \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
