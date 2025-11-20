@@ -19,7 +19,10 @@ function App() {
           second new paragraph added
         </p>
         <p>
-          testing commit
+          testing commit 1
+        </p>
+        <p>
+          testing commit 2
         </p>
         <a
           className="App-link"
