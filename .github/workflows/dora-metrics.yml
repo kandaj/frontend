@@ -135,3 +135,13 @@ jobs:
             --value 1 \
             --unit Count \
             --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+            
+          # Also record as change failure if there's a release tag
+          if [ -n "$CURRENT_TAG" ]; then
+            aws cloudwatch put-metric-data \
+              --namespace "DORA" \
+              --metric-name "ChangeFailure" \
+              --value 1 \
+              --unit Count \
+              --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_TAG}
+          fi
