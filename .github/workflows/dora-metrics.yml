@@ -17,7 +17,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # AWS auth
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -38,7 +37,7 @@ jobs:
           echo "environment=production" >> $GITHUB_OUTPUT
           echo "service=telescope" >> $GITHUB_OUTPUT
 
-          echo "Deployment finished: commit=$COMMIT_SHA status=$CONCLUSION"
+          echo "📦 Deployment finished: commit=$COMMIT_SHA status=$CONCLUSION"
 
       # ────────────────────────────────────────────────
       # 2. Detect release tags (current + previous)
@@ -47,29 +46,35 @@ jobs:
         id: tags
         run: |
           COMMIT_SHA="${{ steps.meta.outputs.commit_sha }}"
+          
+          # Ensure we have all tags
+          git fetch --tags --force || true
 
           CURRENT_TAG=$(git describe --tags --exact-match $COMMIT_SHA 2>/dev/null || echo "")
-          echo "Current release tag: $CURRENT_TAG"
 
           if [ -z "$CURRENT_TAG" ]; then
-            echo "No release tag found — not a production release."
+            echo "⚠️  No release tag found — not a production release."
             echo "current_tag=" >> $GITHUB_OUTPUT
             echo "previous_tag=" >> $GITHUB_OUTPUT
             exit 0
           fi
+          
+          echo "✅ Current release tag: $CURRENT_TAG"
 
           # Find previous release tag
           PREV_TAG=$(git describe --tags --abbrev=0 ${CURRENT_TAG}^ 2>/dev/null || echo "")
-          echo "Previous release tag: $PREV_TAG"
+          
+          if [ -n "$PREV_TAG" ]; then
+            echo "📊 Previous release tag: $PREV_TAG"
+          else
+            echo "📌 First release detected"
+          fi
 
           echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
           echo "previous_tag=$PREV_TAG" >> $GITHUB_OUTPUT
 
       # ────────────────────────────────────────────────
       # 3. Record SUCCESS metrics
-      #    - Lead Time
-      #    - Deployment Count
-      #    - Batch Size
       # ────────────────────────────────────────────────
       - name: Record Successful Deployment Metrics
         if: ${{ steps.meta.outputs.conclusion == 'success' && steps.tags.outputs.current_tag != '' }}
@@ -77,11 +82,9 @@ jobs:
           CURRENT_TAG="${{ steps.tags.outputs.current_tag }}"
           PREV_TAG="${{ steps.tags.outputs.previous_tag }}"
 
-          echo "Computing metrics for release $CURRENT_TAG"
+          echo "📈 Computing metrics for release $CURRENT_TAG"
 
-          # ----------------------------
           # Lead Time Calculation
-          # ----------------------------
           if [ -z "$PREV_TAG" ]; then
             echo "First release — using root commit."
             FIRST_COMMIT=$(git rev-list --max-parents=0 HEAD)
@@ -93,35 +96,31 @@ jobs:
           DEPLOY_TIME=$(date +%s)
           LEAD_TIME=$((DEPLOY_TIME - FIRST_COMMIT_TIME))
 
-          echo "Lead Time = ${LEAD_TIME}s"
+          echo "⏱️  Lead Time = ${LEAD_TIME}s"
 
-          # ----------------------------
           # Batch Size Calculation
-          # ----------------------------
           if [ -z "$PREV_TAG" ]; then
             COMMIT_COUNT=$(git rev-list --count ${CURRENT_TAG})
           else
             COMMIT_COUNT=$(git rev-list --count ${PREV_TAG}..${CURRENT_TAG})
           fi
 
-          echo "Batch Size = $COMMIT_COUNT commits"
+          echo "📦 Batch Size = $COMMIT_COUNT commits"
 
-          # ----------------------------
           # Send metrics to CloudWatch
-          # ----------------------------
           # aws cloudwatch put-metric-data \
           #   --namespace "DORA" \
           #   --metric-name "LeadTimeForChanges" \
           #   --value $LEAD_TIME \
           #   --unit Seconds \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_TAG}
 
           # aws cloudwatch put-metric-data \
           #   --namespace "DORA" \
           #   --metric-name "DeploymentCount" \
           #   --value 1 \
           #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_TAG}
 
           # aws cloudwatch put-metric-data \
           #   --namespace "DORA" \
@@ -129,18 +128,57 @@ jobs:
           #   --value $COMMIT_COUNT \
           #   --unit Count \
           #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_TAG}
-
+          
+          echo "✅ Metrics recorded successfully"
+      
       # ────────────────────────────────────────────────
-      # 4. Record failed deployments
+      # 4. Record Deployment Duration
+      # ────────────────────────────────────────────────
+      - name: Record Deployment Duration
+        if: ${{ steps.meta.outputs.conclusion == 'success' && steps.tags.outputs.current_tag != '' }}
+        run: |
+          DURATION_MS="${{ github.event.workflow_run.run_duration_ms }}"
+
+          if [ -z "$DURATION_MS" ] || [ "$DURATION_MS" = "null" ]; then
+            echo "⚠️  No duration reported — skipping metric"
+            exit 0
+          fi
+
+          DURATION_SECONDS=$((DURATION_MS / 1000))
+          CURRENT_TAG="${{ steps.tags.outputs.current_tag }}"
+
+          echo "⏱️  Deployment Duration = ${DURATION_SECONDS}s"
+
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "DeploymentDuration" \
+          #   --value $DURATION_SECONDS \
+          #   --unit Seconds \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }},Release=${CURRENT_TAG}
+    
+      # ────────────────────────────────────────────────
+      # 5. Record failed deployments
       # ────────────────────────────────────────────────
       - name: Record Failed Deployment
         if: ${{ steps.meta.outputs.conclusion != 'success' }}
         run: |
-          echo "Deployment failed — recording metric."
+          echo "❌ Deployment failed — recording metrics"
+          
+          CURRENT_TAG="${{ steps.tags.outputs.current_tag }}"
 
           # aws cloudwatch put-metric-data \
           #   --namespace "DORA" \
           #   --metric-name "FailedDeployment" \
           #   --value 1 \
           #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production${CURRENT_TAG:+,Release=${CURRENT_TAG}}
+          
+          # Also record as change failure if there's a release tag
+          # if [ -n "$CURRENT_TAG" ]; then
+          #   aws cloudwatch put-metric-data \
+          #     --namespace "DORA" \
+          #     --metric-name "ChangeFailure" \
+          #     --value 1 \
+          #     --unit Count \
+          #     --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_TAG}
+          # fi
