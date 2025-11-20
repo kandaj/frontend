@@ -68,10 +68,6 @@ jobs:
 
       # -----------------------------
       # 3. Record SUCCESS metrics
-      #    - Lead Time
-      #    - Batch Size
-      #    - Deployment Count
-      #    - Deployment Duration
       # -----------------------------
       - name: Record Successful Deployment Metrics
         if: ${{ steps.meta.outputs.conclusion == 'success' && steps.tags.outputs.current_tag != '' }}
@@ -81,21 +77,21 @@ jobs:
 
           echo "Computing metrics for release $CURRENT_TAG"
 
-          # -------- Lead Time ----------
+          # -------- Lead Time (Option 2: first authored commit → deployment) ----------
           if [ -z "$PREV_TAG" ]; then
             echo "First release — using initial commit on main"
             FIRST_COMMIT=$(git rev-list --max-parents=0 main)
           else
-            # Only consider commits merged into main
-            FIRST_COMMIT=$(git log --first-parent main --format=%H --reverse ${PREV_TAG}..${CURRENT_TAG} | head -1)
+            # Earliest authored commit in the release range (all branches)
+            FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_TAG}..${CURRENT_TAG} | head -1)
           fi
 
-          FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_TAG}..${CURRENT_TAG} | head -1)
+          FIRST_COMMIT_TIME=$(git show -s --format=%ct $FIRST_COMMIT)
           DEPLOY_TIME=$(date +%s)
           LEAD_TIME=$((DEPLOY_TIME - FIRST_COMMIT_TIME))
           echo "Lead Time = ${LEAD_TIME}s"
 
-          # -------- Batch Size ----------
+          # -------- Batch Size (mainline merges only) ----------
           if [ -z "$PREV_TAG" ]; then
             COMMIT_COUNT=$(git rev-list --first-parent --count main)
           else
@@ -103,15 +99,6 @@ jobs:
           fi
           echo "Batch Size = $COMMIT_COUNT commits"
 
-          # -------- Deployment Duration ----------
-          DURATION_MS="${{ github.event.workflow_run.run_duration_ms }}"
-          if [ -z "$DURATION_MS" ]; then
-            echo "No duration reported for workflow run"
-            DURATION_SECONDS=0
-          else
-            DURATION_SECONDS=$((DURATION_MS / 1000))
-          fi
-          echo "Deployment Duration = ${DURATION_SECONDS}s"
 
           # -------- Send metrics to CloudWatch ----------
           # aws cloudwatch put-metric-data \
@@ -135,7 +122,6 @@ jobs:
           #   --unit Count \
           #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
 
-
       # -----------------------------
       # 4. Record FAILED deployments
       # -----------------------------
@@ -143,10 +129,9 @@ jobs:
         if: ${{ steps.meta.outputs.conclusion != 'success' }}
         run: |
           echo "Deployment failed — recording metric."
-
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "FailedDeployment" \
-          #   --value 1 \
-          #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          aws cloudwatch put-metric-data \
+            --namespace "DORA" \
+            --metric-name "FailedDeployment" \
+            --value 1 \
+            --unit Count \
+            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
