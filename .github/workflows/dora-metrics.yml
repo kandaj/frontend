@@ -131,7 +131,7 @@ jobs:
           # Deployment interval
           # ---------------------------------
           PREV_SECS=$(date -d "$PREV_PUB" +%s)
-          DEPLOYMENT_INTERVAL=$(( RELEASE_SECS - PREV_SECS ))
+          DEPLOYMENT_INTERVAL=$(( RELEASE_TIMESTAMP_SECS - PREV_SECS ))
 
           echo "Deployment Interval: $DEPLOYMENT_INTERVAL sec"
 
