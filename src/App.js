@@ -12,17 +12,6 @@ function App() {
         <p>
           Edit <code>src/App.js</code> and save to reload.
         </p>
-        <p>
-          New paragraph added
-        </p>
-        <p>
-          New paragraph1 added
-        </p>
-        <p>
-          New paragraph2 added
-        </p>
-       
-       
        
         <a
           className="App-link"
