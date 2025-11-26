@@ -44,7 +44,7 @@ jobs:
           echo "Deployment finished: commit=$COMMIT_SHA status=$CONCLUSION"
 
       # -----------------------------
-      # 2. Detect GitHub Releases
+      # 2. Detect Current and Previous Release
       # -----------------------------
       - name: Detect Release Information
         id: releases
@@ -53,53 +53,30 @@ jobs:
         run: |
           COMMIT_SHA="${{ steps.meta.outputs.commit_sha }}"
 
-          echo "Searching for release associated with commit: $COMMIT_SHA"
-         
-          # Get all releases and find the one matching this commit
           RELEASES_JSON=$(curl -s -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100")
 
-          # Find release for this commit
-          CURRENT_RELEASE_DATA=$(echo "$RELEASES_JSON" | jq -r --arg commit "$COMMIT_SHA" \
-            '[.[] | select(.target_commitish == $commit or .tag_name as $tag | ($commit | startswith($tag)))] | .[0]')
+          # Sort releases by published date descending
+          SORTED=$(echo "$RELEASES_JSON" | jq -r 'sort_by(.published_at) | reverse')
 
-          if [ "$CURRENT_RELEASE_DATA" == "null" ] || [ -z "$CURRENT_RELEASE_DATA" ]; then
-            echo "No release found for commit $COMMIT_SHA — not a production release."
-            echo "current_release=" >> $GITHUB_OUTPUT
-            echo "previous_release=" >> $GITHUB_OUTPUT
-            echo "current_commit=" >> $GITHUB_OUTPUT
-            echo "previous_commit=" >> $GITHUB_OUTPUT
-            echo "published_at=" >> $GITHUB_OUTPUT
+          CURRENT_RELEASE_DATA=$(echo "$SORTED" | jq '.[0]')
+          PREV_RELEASE_DATA=$(echo "$SORTED" | jq '.[1]')
+
+          if [[ "$CURRENT_RELEASE_DATA" == "null" ]]; then
+            echo "No releases found!"
             exit 0
           fi
 
           CURRENT_RELEASE=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.tag_name')
-          CURRENT_NAME=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.name')
-          PUBLISHED_AT=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.published_at')
           CURRENT_COMMIT=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.target_commitish')
+          PUBLISHED_AT=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.published_at')
 
-          echo "========================================"
-          echo "Current release: $CURRENT_RELEASE"
-          echo "Release name: $CURRENT_NAME"
-          echo "Published at: $PUBLISHED_AT"
-          echo "Target commit: $CURRENT_COMMIT"
-          echo "========================================"
-
-          # Get previous release (by published date)
-          PREV_RELEASE_DATA=$(echo "$RELEASES_JSON" | jq -r --arg current "$CURRENT_RELEASE" \
-            '[.[] | select(.tag_name != $current)] | .[0]')
-
-          if [ "$PREV_RELEASE_DATA" != "null" ] && [ -n "$PREV_RELEASE_DATA" ]; then
+          if [[ "$PREV_RELEASE_DATA" != "null" ]]; then
             PREV_RELEASE=$(echo "$PREV_RELEASE_DATA" | jq -r '.tag_name')
             PREV_COMMIT=$(echo "$PREV_RELEASE_DATA" | jq -r '.target_commitish')
             PREV_PUBLISHED=$(echo "$PREV_RELEASE_DATA" | jq -r '.published_at')
-           
-            echo "Previous release: $PREV_RELEASE"
-            echo "Previous commit: $PREV_COMMIT"
-            echo "Previous published: $PREV_PUBLISHED"
           else
-            echo "No previous release found — this is the first release"
             PREV_RELEASE=""
             PREV_COMMIT=""
             PREV_PUBLISHED=""
@@ -113,59 +90,43 @@ jobs:
           echo "previous_published_at=$PREV_PUBLISHED" >> $GITHUB_OUTPUT
 
       # -----------------------------
-      # 3. Record SUCCESS metrics
+      # 3. Compute DORA Metrics
       # -----------------------------
-      - name: Record Successful Deployment Metrics
-        if: ${{ steps.meta.outputs.conclusion == 'success' && steps.releases.outputs.current_release != '' }}
+      - name: Compute DORA Metrics
+        if: ${{ steps.releases.outputs.current_release != '' }}
         run: |
-          CURRENT_RELEASE="${{ steps.releases.outputs.current_release }}"
-          PREV_RELEASE="${{ steps.releases.outputs.previous_release }}"
           CURRENT_COMMIT="${{ steps.releases.outputs.current_commit }}"
           PREV_COMMIT="${{ steps.releases.outputs.previous_commit }}"
           PUBLISHED_AT="${{ steps.releases.outputs.published_at }}"
+          PREV_PUBLISHED="${{ steps.releases.outputs.previous_published_at }}"
 
-          echo "========================================"
-          echo "Computing metrics for release $CURRENT_RELEASE"
-          echo "========================================"
+          echo "Calculating DORA metrics for release ${{ steps.releases.outputs.current_release }}"
 
-          # -------- Lead Time (first authored commit → release publication) ----------
+          # Lead Time: first commit → release published
           if [ -z "$PREV_COMMIT" ]; then
-            echo "First release — using initial commit on main"
             FIRST_COMMIT=$(git rev-list --max-parents=0 main)
           else
-            # Earliest authored commit in the release range
             FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_COMMIT}..${CURRENT_COMMIT} | head -1)
           fi
 
-          if [ -z "$FIRST_COMMIT" ]; then
-            echo "ERROR: Could not determine first commit in release"
-            exit 1
-          fi
-
           FIRST_COMMIT_TIME=$(git show -s --format=%ct $FIRST_COMMIT)
-         
-          # Convert release publication time to Unix timestamp
           RELEASE_TIME=$(date -d "$PUBLISHED_AT" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$PUBLISHED_AT" +%s)
           LEAD_TIME=$((RELEASE_TIME - FIRST_COMMIT_TIME))
-         
-          echo "First commit: $FIRST_COMMIT"
-          echo "First commit time: $(date -u -d @$FIRST_COMMIT_TIME '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -r $FIRST_COMMIT_TIME '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Release published: $PUBLISHED_AT"
-          echo "Lead Time = ${LEAD_TIME}s (≈ $((LEAD_TIME / 86400)) days, $((LEAD_TIME % 86400 / 3600)) hours)"
+          echo "Lead Time: $LEAD_TIME seconds (≈ $((LEAD_TIME / 86400)) days)"
 
-          # -------- Batch Size (mainline merges only) ----------
+          # Batch Size: commits between previous and current release
           if [ -z "$PREV_COMMIT" ]; then
             COMMIT_COUNT=$(git rev-list --first-parent --count main)
           else
             COMMIT_COUNT=$(git rev-list --first-parent --count ${PREV_COMMIT}..${CURRENT_COMMIT})
           fi
-          echo "Batch Size = $COMMIT_COUNT commits (mainline merges)"
+          echo "Batch Size: $COMMIT_COUNT commits"
 
-          # -------- Deployment Frequency (time between releases) ----------
-          if [ -n "${{ steps.releases.outputs.previous_published_at }}" ]; then
-            PREV_RELEASE_TIME=$(date -d "${{ steps.releases.outputs.previous_published_at }}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${{ steps.releases.outputs.previous_published_at }}" +%s)
+          # Deployment Frequency: time between current and previous release
+          if [ -n "$PREV_PUBLISHED" ]; then
+            PREV_RELEASE_TIME=$(date -d "$PREV_PUBLISHED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$PREV_PUBLISHED" +%s)
             DEPLOYMENT_INTERVAL=$((RELEASE_TIME - PREV_RELEASE_TIME))
-            echo "Time since previous release = ${DEPLOYMENT_INTERVAL}s (≈ $((DEPLOYMENT_INTERVAL / 86400)) days, $((DEPLOYMENT_INTERVAL % 86400 / 3600)) hours)"
+            echo "Time since previous release: $DEPLOYMENT_INTERVAL seconds (≈ $((DEPLOYMENT_INTERVAL / 86400)) days)"
           else
             DEPLOYMENT_INTERVAL=0
             echo "No previous release to calculate deployment frequency"
