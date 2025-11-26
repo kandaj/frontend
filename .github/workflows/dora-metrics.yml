@@ -132,6 +132,19 @@ jobs:
             echo "No previous release to calculate deployment frequency"
           fi
 
+          # 🔥 NEW — LOG COMMITS
+          echo "========================================"
+          echo "📜 COMMITS INCLUDED IN THIS RELEASE"
+          echo "========================================"
+
+          if [ -z "$PREV_COMMIT" ]; then
+            echo "No previous release — listing all commits in main:"
+            git log --pretty=format:"%h %ad %an — %s" --date=short main
+          else
+            git log --pretty=format:"%h %ad %an — %s" --date=short ${PREV_COMMIT}..${CURRENT_COMMIT}
+          fi
+
+
           echo "========================================"
           echo "Sending metrics to CloudWatch..."
           echo "========================================"
