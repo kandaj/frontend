@@ -28,160 +28,118 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION || 'eu-west-1' }}
 
       # -----------------------------
-      # 1. Detect deployment metadata
+      # Deployment metadata
       # -----------------------------
       - name: Detect Trigger Context
         id: meta
         run: |
-          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
-          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
-
-          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
-          echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
+          echo "commit_sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+          echo "conclusion=${{ github.event.workflow_run.conclusion }}" >> $GITHUB_OUTPUT
           echo "environment=production" >> $GITHUB_OUTPUT
           echo "service=telescope" >> $GITHUB_OUTPUT
 
-          echo "Deployment finished: commit=$COMMIT_SHA status=$CONCLUSION"
-
-       # -----------------------------
-      # Release timestamp detection
+      # -----------------------------
+      # Release timestamps
       # -----------------------------
       - name: Detect Release Information
         id: releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Fetching releases…"
-
           RELEASES=$(gh api repos/${{ github.repository }}/releases \
             --paginate --jq '.[] | {tag: .tag_name, published: .published_at}')
 
-          COUNT=$(echo "$RELEASES" | wc -l)
-          if [ "$COUNT" -lt 1 ]; then
-            echo "No releases found!"
+          if [ -z "$RELEASES" ]; then
+            echo "No releases found"
             exit 0
           fi
 
           CURRENT_RELEASE=$(echo "$RELEASES" | sort -r -k2 | head -1)
           PREVIOUS_RELEASE=$(echo "$RELEASES" | sort -r -k2 | sed -n '2p')
 
-          CURRENT_TAG=$(echo "$CURRENT_RELEASE" | jq -r '.tag')
           CURRENT_PUB=$(echo "$CURRENT_RELEASE" | jq -r '.published')
-
-          PREV_TAG=$(echo "$PREVIOUS_RELEASE" | jq -r '.tag // empty')
           PREV_PUB=$(echo "$PREVIOUS_RELEASE" | jq -r '.published // empty')
 
-          echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
-          echo "previous_tag=$PREV_TAG" >> $GITHUB_OUTPUT
           echo "published_at=$CURRENT_PUB" >> $GITHUB_OUTPUT
           echo "previous_published_at=$PREV_PUB" >> $GITHUB_OUTPUT
 
       # -----------------------------
-      # Compute DORA metrics
+      # Compute DORA Metrics
       # -----------------------------
       - name: Compute DORA Metrics (timestamp-based)
         run: |
           CURRENT_PUB="${{ steps.releases.outputs.published_at }}"
           PREV_PUB="${{ steps.releases.outputs.previous_published_at }}"
 
-          echo "=== Current published at: $CURRENT_PUB"
-          echo "=== Previous published at: $PREV_PUB"
-
           if [ -z "$PREV_PUB" ]; then
-            echo "First release – use repo creation time for PREV_PUB"
             PREV_PUB=$(git log --reverse --format=%aI | head -1)
           fi
 
           SINCE="$PREV_PUB"
           UNTIL="$CURRENT_PUB"
 
-          echo "TIME RANGE: $SINCE → $UNTIL"
-
-          # ---------------------------------
-          # Collect commit list (monorepo safe)
-          # ---------------------------------
           COMMITS=$(git log --pretty=format:"%H %aI %s" \
             --since="$SINCE" --until="$UNTIL" --reverse)
 
           COMMIT_COUNT=$(echo "$COMMITS" | wc -l)
 
-          echo "========================================"
-          echo "📜 COMMITS INCLUDED IN RELEASE"
-          echo "========================================"
+          echo "COMMITS FOUND:"
           echo "$COMMITS"
-          echo "========================================"
 
-          # ---------------------------------
-          # Lead time
-          # earliest commit included in release → release timestamp
-          # ---------------------------------
-          # extract earliest commit timestamp (field 2)
-          EARLIEST_COMMIT_TIMESTAMP=$(echo "$COMMITS" | head -1 | awk '{print $2}')
+          # Earliest commit timestamp in this release window
+          FIRST_COMMIT_TIMESTAMP=$(echo "$COMMITS" | head -1 | awk '{print $2}')
 
-          # convert timestamps to epoch seconds
-          EARLIEST_COMMIT_SECS=$(date -d "$EARLIEST_COMMIT_TIMESTAMP" +%s)
-          RELEASE_TIMESTAMP_SECS=$(date -d "$CURRENT_PUB" +%s)
+          # Convert timestamps to epoch seconds for calculations
+          FIRST_COMMIT_EPOCH=$(date -d "$FIRST_COMMIT_TIMESTAMP" +%s)
+          CURRENT_RELEASE_EPOCH=$(date -d "$CURRENT_PUB" +%s)
+          PREVIOUS_RELEASE_EPOCH=$(date -d "$PREV_PUB" +%s)
 
-          # compute lead time for this deployment window
-          LEAD_TIME=$(( RELEASE_TIMESTAMP_SECS - EARLIEST_COMMIT_SECS ))
-
-          echo "Lead Time: $LEAD_TIME sec"
-
-          # ---------------------------------
-          # Deployment interval
-          # ---------------------------------
-          PREV_SECS=$(date -d "$PREV_PUB" +%s)
-          DEPLOYMENT_INTERVAL=$(( RELEASE_TIMESTAMP_SECS - PREV_SECS ))
-
-          echo "Deployment Interval: $DEPLOYMENT_INTERVAL sec"
+          # Compute metrics
+          LEAD_TIME=$(( CURRENT_RELEASE_EPOCH - FIRST_COMMIT_EPOCH ))
+          DEPLOYMENT_INTERVAL=$(( CURRENT_RELEASE_EPOCH - PREVIOUS_RELEASE_EPOCH ))
 
           echo "COMMIT_COUNT=$COMMIT_COUNT"
-          echo "LEAD_TIME=$LEAD_TIME" 
+          echo "LEAD_TIME=$LEAD_TIME"
           echo "DEPLOYMENT_INTERVAL=$DEPLOYMENT_INTERVAL"
-
-          echo "Lead Time: $LEAD_TIME sec"
 
 
           echo "========================================"
           echo "Sending metrics to CloudWatch..."
           echo "========================================"
 
-          #-------- Send metrics to CloudWatch ----------
+          # ------- Send to CloudWatch ------------
           # aws cloudwatch put-metric-data \
           #   --namespace "DORA" \
           #   --metric-name "LeadTimeForChanges" \
-          #   --value $LEAD_TIME \
+          #   --value "$LEAD_TIME" \
           #   --unit Seconds \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
 
           # aws cloudwatch put-metric-data \
           #   --namespace "DORA" \
           #   --metric-name "BatchSize" \
-          #   --value $COMMIT_COUNT \
+          #   --value "$COMMIT_COUNT" \
           #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }},Release=$CURRENT_RELEASE
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
 
           # aws cloudwatch put-metric-data \
           #   --namespace "DORA" \
           #   --metric-name "DeploymentCount" \
           #   --value 1 \
           #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
 
-          # # Send deployment interval if we have a previous release
           # if [ $DEPLOYMENT_INTERVAL -gt 0 ]; then
           #   aws cloudwatch put-metric-data \
           #     --namespace "DORA" \
           #     --metric-name "DeploymentInterval" \
-          #     --value $DEPLOYMENT_INTERVAL \
+          #     --value "$DEPLOYMENT_INTERVAL" \
           #     --unit Seconds \
-          #     --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          #     --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
           # fi
 
-          # echo "✓ Metrics successfully sent to CloudWatch"
-
       # -----------------------------
-      # 4. Record FAILED deployments
+      # Record FAILED deployments
       # -----------------------------
       - name: Record Failed Deployment
         if: ${{ steps.meta.outputs.conclusion != 'success' }}
