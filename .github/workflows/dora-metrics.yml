@@ -43,106 +43,101 @@ jobs:
 
           echo "Deployment finished: commit=$COMMIT_SHA status=$CONCLUSION"
 
-      # -----------------------------
-      # 2. Detect Current and Previous Release
+       # -----------------------------
+      # Release timestamp detection
       # -----------------------------
       - name: Detect Release Information
         id: releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          COMMIT_SHA="${{ steps.meta.outputs.commit_sha }}"
+          echo "Fetching releases…"
 
-          RELEASES_JSON=$(curl -s -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100")
+          RELEASES=$(gh api repos/${{ github.repository }}/releases \
+            --paginate --jq '.[] | {tag: .tag_name, published: .published_at}')
 
-          # Sort releases by published date descending
-          SORTED=$(echo "$RELEASES_JSON" | jq -r 'sort_by(.published_at) | reverse')
-
-          CURRENT_RELEASE_DATA=$(echo "$SORTED" | jq '.[0]')
-          PREV_RELEASE_DATA=$(echo "$SORTED" | jq '.[1]')
-
-          if [[ "$CURRENT_RELEASE_DATA" == "null" ]]; then
+          COUNT=$(echo "$RELEASES" | wc -l)
+          if [ "$COUNT" -lt 1 ]; then
             echo "No releases found!"
             exit 0
           fi
 
-          CURRENT_RELEASE=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.tag_name')
-          CURRENT_COMMIT=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.target_commitish')
-          PUBLISHED_AT=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.published_at')
+          CURRENT_RELEASE=$(echo "$RELEASES" | sort -r -k2 | head -1)
+          PREVIOUS_RELEASE=$(echo "$RELEASES" | sort -r -k2 | sed -n '2p')
 
-          if [[ "$PREV_RELEASE_DATA" != "null" ]]; then
-            PREV_RELEASE=$(echo "$PREV_RELEASE_DATA" | jq -r '.tag_name')
-            PREV_COMMIT=$(echo "$PREV_RELEASE_DATA" | jq -r '.target_commitish')
-            PREV_PUBLISHED=$(echo "$PREV_RELEASE_DATA" | jq -r '.published_at')
-          else
-            PREV_RELEASE=""
-            PREV_COMMIT=""
-            PREV_PUBLISHED=""
-          fi
+          CURRENT_TAG=$(echo "$CURRENT_RELEASE" | jq -r '.tag')
+          CURRENT_PUB=$(echo "$CURRENT_RELEASE" | jq -r '.published')
 
-          echo "current_release=$CURRENT_RELEASE" >> $GITHUB_OUTPUT
-          echo "previous_release=$PREV_RELEASE" >> $GITHUB_OUTPUT
-          echo "current_commit=$CURRENT_COMMIT" >> $GITHUB_OUTPUT
-          echo "previous_commit=$PREV_COMMIT" >> $GITHUB_OUTPUT
-          echo "published_at=$PUBLISHED_AT" >> $GITHUB_OUTPUT
-          echo "previous_published_at=$PREV_PUBLISHED" >> $GITHUB_OUTPUT
+          PREV_TAG=$(echo "$PREVIOUS_RELEASE" | jq -r '.tag // empty')
+          PREV_PUB=$(echo "$PREVIOUS_RELEASE" | jq -r '.published // empty')
+
+          echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+          echo "previous_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "published_at=$CURRENT_PUB" >> $GITHUB_OUTPUT
+          echo "previous_published_at=$PREV_PUB" >> $GITHUB_OUTPUT
 
       # -----------------------------
-      # 3. Compute DORA Metrics
+      # Compute DORA metrics
       # -----------------------------
-      - name: Compute DORA Metrics
-        if: ${{ steps.releases.outputs.current_release != '' }}
+      - name: Compute DORA Metrics (timestamp-based)
         run: |
-          CURRENT_COMMIT="${{ steps.releases.outputs.current_commit }}"
-          PREV_COMMIT="${{ steps.releases.outputs.previous_commit }}"
-          PUBLISHED_AT="${{ steps.releases.outputs.published_at }}"
-          PREV_PUBLISHED="${{ steps.releases.outputs.previous_published_at }}"
+          CURRENT_PUB="${{ steps.releases.outputs.published_at }}"
+          PREV_PUB="${{ steps.releases.outputs.previous_published_at }}"
 
-          echo "Calculating DORA metrics for release ${{ steps.releases.outputs.current_release }}"
+          echo "=== Current published at: $CURRENT_PUB"
+          echo "=== Previous published at: $PREV_PUB"
 
-          # Lead Time: first commit → release published
-          if [ -z "$PREV_COMMIT" ]; then
-            FIRST_COMMIT=$(git rev-list --max-parents=0 main)
-          else
-            FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_COMMIT}..${CURRENT_COMMIT} | head -1)
+          if [ -z "$PREV_PUB" ]; then
+            echo "First release – use repo creation time for PREV_PUB"
+            PREV_PUB=$(git log --reverse --format=%aI | head -1)
           fi
 
-          FIRST_COMMIT_TIME=$(git show -s --format=%ct $FIRST_COMMIT)
-          RELEASE_TIME=$(date -d "$PUBLISHED_AT" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$PUBLISHED_AT" +%s)
-          LEAD_TIME=$((RELEASE_TIME - FIRST_COMMIT_TIME))
-          echo "Lead Time: $LEAD_TIME seconds (≈ $((LEAD_TIME / 86400)) days)"
+          SINCE="$PREV_PUB"
+          UNTIL="$CURRENT_PUB"
 
-          # Batch Size: commits between previous and current release
-          if [ -z "$PREV_COMMIT" ]; then
-            COMMIT_COUNT=$(git rev-list --first-parent --count main)
-          else
-            COMMIT_COUNT=$(git rev-list --first-parent --count ${PREV_COMMIT}..${CURRENT_COMMIT})
-          fi
-          echo "Batch Size: $COMMIT_COUNT commits"
+          echo "TIME RANGE: $SINCE → $UNTIL"
 
-          # Deployment Frequency: time between current and previous release
-          if [ -n "$PREV_PUBLISHED" ]; then
-            PREV_RELEASE_TIME=$(date -d "$PREV_PUBLISHED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$PREV_PUBLISHED" +%s)
-            DEPLOYMENT_INTERVAL=$((RELEASE_TIME - PREV_RELEASE_TIME))
-            echo "Time since previous release: $DEPLOYMENT_INTERVAL seconds (≈ $((DEPLOYMENT_INTERVAL / 86400)) days)"
-          else
-            DEPLOYMENT_INTERVAL=0
-            echo "No previous release to calculate deployment frequency"
-          fi
+          # ---------------------------------
+          # Collect commit list (monorepo safe)
+          # ---------------------------------
+          COMMITS=$(git log --pretty=format:"%H %aI %s" \
+            --since="$SINCE" --until="$UNTIL")
 
-          # 🔥 NEW — LOG COMMITS
+          COMMIT_COUNT=$(echo "$COMMITS" | wc -l)
+
           echo "========================================"
-          echo "📜 COMMITS INCLUDED IN THIS RELEASE"
+          echo "📜 COMMITS INCLUDED IN RELEASE"
+          echo "========================================"
+          echo "$COMMITS"
           echo "========================================"
 
-          if [ -z "$PREV_COMMIT" ]; then
-            echo "No previous release — listing all commits in main:"
-            git log --pretty=format:"%h %ad %an — %s" --date=short main
-          else
-            git log --pretty=format:"%h %ad %an — %s" --date=short ${PREV_COMMIT}..${CURRENT_COMMIT}
-          fi
+          # ---------------------------------
+          # Lead time
+          # earliest commit included in release → release timestamp
+          # ---------------------------------
+          # extract earliest commit timestamp (field 2)
+          EARLIEST_COMMIT_TIMESTAMP=$(echo "$COMMITS" | head -1 | awk '{print $2}')
+
+          # convert timestamps to epoch seconds
+          EARLIEST_COMMIT_SECS=$(date -d "$EARLIEST_COMMIT_TIMESTAMP" +%s)
+          RELEASE_TIMESTAMP_SECS=$(date -d "$CURRENT_PUB" +%s)
+
+          # compute lead time for this deployment window
+          LEAD_TIME=$(( RELEASE_TIMESTAMP_SECS - EARLIEST_COMMIT_SECS ))
+
+          echo "Lead Time: $LEAD_TIME sec"
+
+          # ---------------------------------
+          # Deployment interval
+          # ---------------------------------
+          PREV_SECS=$(date -d "$PREV_PUB" +%s)
+          DEPLOYMENT_INTERVAL=$(( RELEASE_SECS - PREV_SECS ))
+
+          echo "Deployment Interval: $DEPLOYMENT_INTERVAL sec"
+
+          echo "COMMIT_COUNT=$COMMIT_COUNT" >> $GITHUB_ENV
+          echo "LEAD_TIME=$LEAD_TIME" >> $GITHUB_ENV
+          echo "DEPLOYMENT_INTERVAL=$DEPLOYMENT_INTERVAL" >> $GITHUB_ENV
 
 
           echo "========================================"
