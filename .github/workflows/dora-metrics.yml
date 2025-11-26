@@ -176,38 +176,38 @@ jobs:
           echo "========================================"
 
           #-------- Send metrics to CloudWatch ----------
-          aws cloudwatch put-metric-data \
-            --namespace "DORA" \
-            --metric-name "LeadTimeForChanges" \
-            --value $LEAD_TIME \
-            --unit Seconds \
-            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "LeadTimeForChanges" \
+          #   --value $LEAD_TIME \
+          #   --unit Seconds \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
 
-          aws cloudwatch put-metric-data \
-            --namespace "DORA" \
-            --metric-name "BatchSize" \
-            --value $COMMIT_COUNT \
-            --unit Count \
-            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }},Release=$CURRENT_RELEASE
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "BatchSize" \
+          #   --value $COMMIT_COUNT \
+          #   --unit Count \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }},Release=$CURRENT_RELEASE
 
-          aws cloudwatch put-metric-data \
-            --namespace "DORA" \
-            --metric-name "DeploymentCount" \
-            --value 1 \
-            --unit Count \
-            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "DeploymentCount" \
+          #   --value 1 \
+          #   --unit Count \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
 
-          # Send deployment interval if we have a previous release
-          if [ $DEPLOYMENT_INTERVAL -gt 0 ]; then
-            aws cloudwatch put-metric-data \
-              --namespace "DORA" \
-              --metric-name "DeploymentInterval" \
-              --value $DEPLOYMENT_INTERVAL \
-              --unit Seconds \
-              --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
-          fi
+          # # Send deployment interval if we have a previous release
+          # if [ $DEPLOYMENT_INTERVAL -gt 0 ]; then
+          #   aws cloudwatch put-metric-data \
+          #     --namespace "DORA" \
+          #     --metric-name "DeploymentInterval" \
+          #     --value $DEPLOYMENT_INTERVAL \
+          #     --unit Seconds \
+          #     --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          # fi
 
-          echo "✓ Metrics successfully sent to CloudWatch"
+          # echo "✓ Metrics successfully sent to CloudWatch"
 
       # -----------------------------
       # 4. Record FAILED deployments
