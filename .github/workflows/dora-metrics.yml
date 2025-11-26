@@ -2,7 +2,8 @@ name: DORA Metrics Collection
 on:
   workflow_run:
     workflows: ["release"]   # Must match the exact name of your release workflow
-    types: [completed]
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -43,84 +44,170 @@ jobs:
           echo "Deployment finished: commit=$COMMIT_SHA status=$CONCLUSION"
 
       # -----------------------------
-      # 2. Detect release tags
+      # 2. Detect GitHub Releases
       # -----------------------------
-      - name: Detect Release Tags
-        id: tags
+      - name: Detect Release Information
+        id: releases
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           COMMIT_SHA="${{ steps.meta.outputs.commit_sha }}"
 
-          CURRENT_TAG=$(git describe --tags --exact-match $COMMIT_SHA 2>/dev/null || echo "")
-          echo "Current release tag: $CURRENT_TAG"
+          echo "Searching for release associated with commit: $COMMIT_SHA"
+         
+          # Get all releases and find the one matching this commit
+          RELEASES_JSON=$(curl -s -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100")
 
-          if [ -z "$CURRENT_TAG" ]; then
-            echo "No release tag found — not a production release."
-            echo "current_tag=" >> $GITHUB_OUTPUT
-            echo "previous_tag=" >> $GITHUB_OUTPUT
+          # Find release for this commit
+          CURRENT_RELEASE_DATA=$(echo "$RELEASES_JSON" | jq -r --arg commit "$COMMIT_SHA" \
+            '[.[] | select(.target_commitish == $commit or .tag_name as $tag | ($commit | startswith($tag)))] | .[0]')
+
+          if [ "$CURRENT_RELEASE_DATA" == "null" ] || [ -z "$CURRENT_RELEASE_DATA" ]; then
+            echo "No release found for commit $COMMIT_SHA — not a production release."
+            echo "current_release=" >> $GITHUB_OUTPUT
+            echo "previous_release=" >> $GITHUB_OUTPUT
+            echo "current_commit=" >> $GITHUB_OUTPUT
+            echo "previous_commit=" >> $GITHUB_OUTPUT
+            echo "published_at=" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          PREV_TAG=$(git describe --tags --abbrev=0 ${CURRENT_TAG}^ 2>/dev/null || echo "")
-          echo "Previous release tag: $PREV_TAG"
+          CURRENT_RELEASE=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.tag_name')
+          CURRENT_NAME=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.name')
+          PUBLISHED_AT=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.published_at')
+          CURRENT_COMMIT=$(echo "$CURRENT_RELEASE_DATA" | jq -r '.target_commitish')
 
-          echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
-          echo "previous_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "========================================"
+          echo "Current release: $CURRENT_RELEASE"
+          echo "Release name: $CURRENT_NAME"
+          echo "Published at: $PUBLISHED_AT"
+          echo "Target commit: $CURRENT_COMMIT"
+          echo "========================================"
+
+          # Get previous release (by published date)
+          PREV_RELEASE_DATA=$(echo "$RELEASES_JSON" | jq -r --arg current "$CURRENT_RELEASE" \
+            '[.[] | select(.tag_name != $current)] | .[0]')
+
+          if [ "$PREV_RELEASE_DATA" != "null" ] && [ -n "$PREV_RELEASE_DATA" ]; then
+            PREV_RELEASE=$(echo "$PREV_RELEASE_DATA" | jq -r '.tag_name')
+            PREV_COMMIT=$(echo "$PREV_RELEASE_DATA" | jq -r '.target_commitish')
+            PREV_PUBLISHED=$(echo "$PREV_RELEASE_DATA" | jq -r '.published_at')
+           
+            echo "Previous release: $PREV_RELEASE"
+            echo "Previous commit: $PREV_COMMIT"
+            echo "Previous published: $PREV_PUBLISHED"
+          else
+            echo "No previous release found — this is the first release"
+            PREV_RELEASE=""
+            PREV_COMMIT=""
+            PREV_PUBLISHED=""
+          fi
+
+          echo "current_release=$CURRENT_RELEASE" >> $GITHUB_OUTPUT
+          echo "previous_release=$PREV_RELEASE" >> $GITHUB_OUTPUT
+          echo "current_commit=$CURRENT_COMMIT" >> $GITHUB_OUTPUT
+          echo "previous_commit=$PREV_COMMIT" >> $GITHUB_OUTPUT
+          echo "published_at=$PUBLISHED_AT" >> $GITHUB_OUTPUT
+          echo "previous_published_at=$PREV_PUBLISHED" >> $GITHUB_OUTPUT
 
       # -----------------------------
       # 3. Record SUCCESS metrics
       # -----------------------------
       - name: Record Successful Deployment Metrics
-        if: ${{ steps.meta.outputs.conclusion == 'success' && steps.tags.outputs.current_tag != '' }}
+        if: ${{ steps.meta.outputs.conclusion == 'success' && steps.releases.outputs.current_release != '' }}
         run: |
-          CURRENT_TAG="${{ steps.tags.outputs.current_tag }}"
-          PREV_TAG="${{ steps.tags.outputs.previous_tag }}"
+          CURRENT_RELEASE="${{ steps.releases.outputs.current_release }}"
+          PREV_RELEASE="${{ steps.releases.outputs.previous_release }}"
+          CURRENT_COMMIT="${{ steps.releases.outputs.current_commit }}"
+          PREV_COMMIT="${{ steps.releases.outputs.previous_commit }}"
+          PUBLISHED_AT="${{ steps.releases.outputs.published_at }}"
 
-          echo "Computing metrics for release $CURRENT_TAG"
+          echo "========================================"
+          echo "Computing metrics for release $CURRENT_RELEASE"
+          echo "========================================"
 
-          # -------- Lead Time (Option 2: first authored commit → deployment) ----------
-          if [ -z "$PREV_TAG" ]; then
+          # -------- Lead Time (first authored commit → release publication) ----------
+          if [ -z "$PREV_COMMIT" ]; then
             echo "First release — using initial commit on main"
             FIRST_COMMIT=$(git rev-list --max-parents=0 main)
           else
-            # Earliest authored commit in the release range (all branches)
-            FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_TAG}..${CURRENT_TAG} | head -1)
+            # Earliest authored commit in the release range
+            FIRST_COMMIT=$(git log --format=%H --reverse ${PREV_COMMIT}..${CURRENT_COMMIT} | head -1)
+          fi
+
+          if [ -z "$FIRST_COMMIT" ]; then
+            echo "ERROR: Could not determine first commit in release"
+            exit 1
           fi
 
           FIRST_COMMIT_TIME=$(git show -s --format=%ct $FIRST_COMMIT)
-          DEPLOY_TIME=$(date +%s)
-          LEAD_TIME=$((DEPLOY_TIME - FIRST_COMMIT_TIME))
-          echo "Lead Time = ${LEAD_TIME}s"
+         
+          # Convert release publication time to Unix timestamp
+          RELEASE_TIME=$(date -d "$PUBLISHED_AT" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$PUBLISHED_AT" +%s)
+          LEAD_TIME=$((RELEASE_TIME - FIRST_COMMIT_TIME))
+         
+          echo "First commit: $FIRST_COMMIT"
+          echo "First commit time: $(date -u -d @$FIRST_COMMIT_TIME '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -r $FIRST_COMMIT_TIME '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Release published: $PUBLISHED_AT"
+          echo "Lead Time = ${LEAD_TIME}s (≈ $((LEAD_TIME / 86400)) days, $((LEAD_TIME % 86400 / 3600)) hours)"
 
           # -------- Batch Size (mainline merges only) ----------
-          if [ -z "$PREV_TAG" ]; then
+          if [ -z "$PREV_COMMIT" ]; then
             COMMIT_COUNT=$(git rev-list --first-parent --count main)
           else
-            COMMIT_COUNT=$(git rev-list --first-parent --count ${PREV_TAG}..${CURRENT_TAG})
+            COMMIT_COUNT=$(git rev-list --first-parent --count ${PREV_COMMIT}..${CURRENT_COMMIT})
           fi
-          echo "Batch Size = $COMMIT_COUNT commits"
+          echo "Batch Size = $COMMIT_COUNT commits (mainline merges)"
 
+          # -------- Deployment Frequency (time between releases) ----------
+          if [ -n "${{ steps.releases.outputs.previous_published_at }}" ]; then
+            PREV_RELEASE_TIME=$(date -d "${{ steps.releases.outputs.previous_published_at }}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${{ steps.releases.outputs.previous_published_at }}" +%s)
+            DEPLOYMENT_INTERVAL=$((RELEASE_TIME - PREV_RELEASE_TIME))
+            echo "Time since previous release = ${DEPLOYMENT_INTERVAL}s (≈ $((DEPLOYMENT_INTERVAL / 86400)) days, $((DEPLOYMENT_INTERVAL % 86400 / 3600)) hours)"
+          else
+            DEPLOYMENT_INTERVAL=0
+            echo "No previous release to calculate deployment frequency"
+          fi
 
-          # -------- Send metrics to CloudWatch ----------
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "LeadTimeForChanges" \
-          #   --value $LEAD_TIME \
-          #   --unit Seconds \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          echo "========================================"
+          echo "Sending metrics to CloudWatch..."
+          echo "========================================"
 
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "BatchSize" \
-          #   --value $COMMIT_COUNT \
-          #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }},Release=$CURRENT_TAG
+          #-------- Send metrics to CloudWatch ----------
+          aws cloudwatch put-metric-data \
+            --namespace "DORA" \
+            --metric-name "LeadTimeForChanges" \
+            --value $LEAD_TIME \
+            --unit Seconds \
+            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
 
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "DeploymentCount" \
-          #   --value 1 \
-          #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          aws cloudwatch put-metric-data \
+            --namespace "DORA" \
+            --metric-name "BatchSize" \
+            --value $COMMIT_COUNT \
+            --unit Count \
+            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }},Release=$CURRENT_RELEASE
+
+          aws cloudwatch put-metric-data \
+            --namespace "DORA" \
+            --metric-name "DeploymentCount" \
+            --value 1 \
+            --unit Count \
+            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+
+          # Send deployment interval if we have a previous release
+          if [ $DEPLOYMENT_INTERVAL -gt 0 ]; then
+            aws cloudwatch put-metric-data \
+              --namespace "DORA" \
+              --metric-name "DeploymentInterval" \
+              --value $DEPLOYMENT_INTERVAL \
+              --unit Seconds \
+              --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
+          fi
+
+          echo "✓ Metrics successfully sent to CloudWatch"
 
       # -----------------------------
       # 4. Record FAILED deployments
@@ -135,13 +222,14 @@ jobs:
             --value 1 \
             --unit Count \
             --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
-            
+
           # Also record as change failure if there's a release tag
-          if [ -n "$CURRENT_TAG" ]; then
+          CURRENT_RELEASE="${{ steps.releases.outputs.current_release }}"
+          if [ -n "$CURRENT_RELEASE" ]; then
             aws cloudwatch put-metric-data \
               --namespace "DORA" \
               --metric-name "ChangeFailure" \
               --value 1 \
               --unit Count \
-              --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_TAG}
+              --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_RELEASE}
           fi
