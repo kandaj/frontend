@@ -77,9 +77,9 @@ jobs:
 
           SINCE="$PREV_PUB"
           UNTIL="$CURRENT_PUB"
-
-          COMMITS=$(git log --pretty=format:"%H %aI %s" \
-            --since="$SINCE" --until="$UNTIL" --reverse)
+          
+          # Get commits between previous and current release, excluding merges
+          COMMITS=$(git log --pretty=format:"%H %aI %s" --no-merges --since="$SINCE" --until="$UNTIL" --reverse)
 
           COMMIT_COUNT=$(echo "$COMMITS" | wc -l)
 
