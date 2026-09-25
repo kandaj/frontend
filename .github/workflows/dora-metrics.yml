@@ -78,8 +78,8 @@ jobs:
           COMMIT_COUNT=$(echo "$COMMITS" | wc -l)
 
           # Count pull requests merged during this release window.
-          PR_COUNT=$(gh api search/issues \
-            --raw-field q="repo=${{ github.repository }} is:pr is:merged merged:$PREV_PUB..$CURRENT_PUB" \
+          PR_COUNT=$(gh api -X GET search/issues \
+            -f q="repo:${{ github.repository }} is:pr is:merged merged:${PREV_PUB}..${CURRENT_PUB}" \
             --jq '.total_count')
 
           echo "COMMITS FOUND:"
