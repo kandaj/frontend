@@ -67,6 +67,8 @@ jobs:
       # Compute DORA Metrics
       # -----------------------------
       - name: Compute DORA Metrics (timestamp-based)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           CURRENT_PUB="${{ steps.releases.outputs.published_at }}"
           PREV_PUB="${{ steps.releases.outputs.previous_published_at }}"
@@ -82,6 +84,11 @@ jobs:
           COMMITS=$(git log --pretty=format:"%H %aI %s" --no-merges --since="$SINCE" --until="$UNTIL" --reverse)
 
           COMMIT_COUNT=$(echo "$COMMITS" | wc -l)
+
+          # Count pull requests merged during this release window.
+          PR_COUNT=$(gh api search/issues \
+            --raw-field q="repo=${{ github.repository }} is:pr is:merged merged:$PREV_PUB..$CURRENT_PUB" \
+            --jq '.total_count')
 
           echo "COMMITS FOUND:"
           echo "$COMMITS"
@@ -99,6 +106,7 @@ jobs:
           DEPLOYMENT_INTERVAL=$(( CURRENT_RELEASE_EPOCH - PREVIOUS_RELEASE_EPOCH ))
 
           echo "COMMIT_COUNT=$COMMIT_COUNT"
+          echo "PR_COUNT=$PR_COUNT"
           echo "LEAD_TIME=$LEAD_TIME"
           echo "DEPLOYMENT_INTERVAL=$DEPLOYMENT_INTERVAL"
 
@@ -119,6 +127,13 @@ jobs:
           #   --namespace "DORA" \
           #   --metric-name "BatchSize" \
           #   --value "$COMMIT_COUNT" \
+          #   --unit Count \
+          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
+
+          # aws cloudwatch put-metric-data \
+          #   --namespace "DORA" \
+          #   --metric-name "PullRequestCount" \
+          #   --value "$PR_COUNT" \
           #   --unit Count \
           #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
 
