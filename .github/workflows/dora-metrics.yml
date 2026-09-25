@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   collect-metrics:
@@ -17,15 +16,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # -----------------------------
-      # Configure AWS credentials
-      # -----------------------------
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION || 'eu-west-1' }}
 
       # -----------------------------
       # Deployment metadata
@@ -109,71 +99,3 @@ jobs:
           echo "PR_COUNT=$PR_COUNT"
           echo "LEAD_TIME=$LEAD_TIME"
           echo "DEPLOYMENT_INTERVAL=$DEPLOYMENT_INTERVAL"
-
-
-          echo "========================================"
-          echo "Sending metrics to CloudWatch..."
-          echo "========================================"
-
-          # ------- Send to CloudWatch ------------
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "LeadTimeForChanges" \
-          #   --value "$LEAD_TIME" \
-          #   --unit Seconds \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
-
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "BatchSize" \
-          #   --value "$COMMIT_COUNT" \
-          #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
-
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "PullRequestCount" \
-          #   --value "$PR_COUNT" \
-          #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
-
-          # aws cloudwatch put-metric-data \
-          #   --namespace "DORA" \
-          #   --metric-name "DeploymentCount" \
-          #   --value 1 \
-          #   --unit Count \
-          #   --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
-
-          # if [ $DEPLOYMENT_INTERVAL -gt 0 ]; then
-          #   aws cloudwatch put-metric-data \
-          #     --namespace "DORA" \
-          #     --metric-name "DeploymentInterval" \
-          #     --value "$DEPLOYMENT_INTERVAL" \
-          #     --unit Seconds \
-          #     --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production
-          # fi
-
-      # -----------------------------
-      # Record FAILED deployments
-      # -----------------------------
-      - name: Record Failed Deployment
-        if: ${{ steps.meta.outputs.conclusion != 'success' }}
-        run: |
-          echo "Deployment failed — recording metric."
-          aws cloudwatch put-metric-data \
-            --namespace "DORA" \
-            --metric-name "FailedDeployment" \
-            --value 1 \
-            --unit Count \
-            --dimensions Pipeline="${{ github.repository }}",Service=${{ steps.meta.outputs.service }},Environment=${{ steps.meta.outputs.environment }}
-
-          # Also record as change failure if there's a release tag
-          CURRENT_RELEASE="${{ steps.releases.outputs.current_release }}"
-          if [ -n "$CURRENT_RELEASE" ]; then
-            aws cloudwatch put-metric-data \
-              --namespace "DORA" \
-              --metric-name "ChangeFailure" \
-              --value 1 \
-              --unit Count \
-              --dimensions Pipeline="${{ github.repository }}",Service=telescope,Environment=production,Release=${CURRENT_RELEASE}
-          fi
